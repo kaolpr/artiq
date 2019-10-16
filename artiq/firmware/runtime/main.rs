@@ -163,6 +163,11 @@ fn startup() {
                 hardware_addr = EthernetAddress([0x02, 0x00, 0x00, 0x00, 0x00, 0x01]);
                 warn!("using default MAC address {}; consider changing it", hardware_addr);
             }
+            #[cfg(soc_platform = "afck1v1")]
+            {
+                hardware_addr = EthernetAddress([0x02, 0x00, 0x00, 0x00, 0x00, 0x01]);
+                warn!("using default MAC address {}; consider changing it", hardware_addr);
+            }
         }
     }
 
@@ -186,6 +191,10 @@ fn startup() {
                 protocol_addr = IpAddress::v4(192, 168, 1, 65);
             }
             #[cfg(soc_platform = "kc705")]
+            {
+                protocol_addr = IpAddress::v4(192, 168, 1, 50);
+            }
+            #[cfg(soc_platform = "afck1v1")]
             {
                 protocol_addr = IpAddress::v4(192, 168, 1, 50);
             }
