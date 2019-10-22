@@ -17,67 +17,8 @@ from misoc.integration.builder import builder_args, builder_argdict
 
 from artiq.gateware.amp import AMPSoC
 from artiq.gateware import rtio
-from artiq.gateware.rtio.phy import (
-    ttl_simple, ttl_serdes_7series, spi2, servo as rtservo)
-from artiq.gateware.suservo import servo, pads as servo_pads
-from artiq.gateware.drtio.transceiver import gtp_7series
-from artiq.gateware.drtio.rx_synchronizer import XilinxRXSynchronizer
-from artiq.gateware.drtio import DRTIOMaster, DRTIOSatellite
 from artiq.build_soc import build_artiq_soc, add_identifier
-from artiq import __version__ as artiq_version
 from artiq.gateware.rtio.phy.ttl_simple import Output
-
-
-class _RTIOCRG(Module, AutoCSR):
-    def __init__(self, platform, rtio_internal_clk):
-        self._clock_sel = CSRStorage()
-        self._pll_reset = CSRStorage(reset=1)
-        self._pll_locked = CSRStatus()
-        self.clock_domains.cd_rtio = ClockDomain()
-        self.clock_domains.cd_rtiox4 = ClockDomain(reset_less=True)
-
-        rtio_external_clk = Signal()
-        clk_synth_se = Signal()
-        clk_synth = platform.request("fpga_clk", 0)
-        platform.add_period_constraint(clk_synth.p, 8.0)
-        self.specials += [
-            Instance("IBUFGDS",
-                p_DIFF_TERM="TRUE", p_IBUF_LOW_PWR="TRUE",
-                i_I=clk_synth.p, i_IB=clk_synth.n, o_O=clk_synth_se),
-            Instance("BUFG", i_I=clk_synth_se, o_O=rtio_external_clk),
-        ]
-        platform.add_false_path_constraints(
-                rtio_external_clk, rtio_internal_clk)
-
-        pll_locked = Signal()
-        rtio_clk = Signal()
-        rtiox4_clk = Signal()
-        ext_clkout_clk = Signal()
-        self.specials += [
-            Instance("PLLE2_ADV",
-                     p_STARTUP_WAIT="FALSE", o_LOCKED=pll_locked,
-
-                     p_REF_JITTER1=0.01,
-                     p_CLKIN1_PERIOD=8.0, p_CLKIN2_PERIOD=8.0,
-                     i_CLKIN1=rtio_internal_clk, i_CLKIN2=rtio_external_clk,
-                     # Warning: CLKINSEL=0 means CLKIN2 is selected
-                     i_CLKINSEL=~self._clock_sel.storage,
-
-                     # VCO @ 1GHz when using 125MHz input
-                     p_CLKFBOUT_MULT=8, p_DIVCLK_DIVIDE=1,
-                     i_CLKFBIN=self.cd_rtio.clk,
-                     i_RST=self._pll_reset.storage,
-
-                     o_CLKFBOUT=rtio_clk,
-
-                     p_CLKOUT0_DIVIDE=2, p_CLKOUT0_PHASE=0.0,
-                     o_CLKOUT0=rtiox4_clk),
-            Instance("BUFG", i_I=rtio_clk, o_O=self.cd_rtio.clk),
-            Instance("BUFG", i_I=rtiox4_clk, o_O=self.cd_rtiox4.clk),
-
-            AsyncResetSynchronizer(self.cd_rtio, ~pll_locked),
-            MultiReg(pll_locked, self._pll_locked.status)
-        ]
 
 
 def fix_serdes_timing_path(platform):
@@ -107,9 +48,17 @@ class StandaloneBase(MiniSoC, AMPSoC):
                          l2_size=128*1024,
                          ethmac_nrxslots=4,
                          ethmac_ntxslots=4,
+                         cpu_reset_address=0x500000,
                          **kwargs)
         AMPSoC.__init__(self)
         add_identifier(self)
+
+        led = self.platform.request("led",2)
+        counter = Signal(24)
+        self.sync += [
+            counter.eq(counter+1)
+        ]
+        self.comb += led.eq(counter[23])
 
         i2c = self.platform.request("i2c")
         self.submodules.i2c = gpio.GPIOTristate([i2c.scl, i2c.sda])
@@ -118,7 +67,7 @@ class StandaloneBase(MiniSoC, AMPSoC):
 
         self.rtio_channels = []
 
-        led_outputs = [Output(self.platform.request("led", i)) for i in range(3)]
+        led_outputs = [Output(self.platform.request("led", i)) for i in range(1)]
         self.submodules += led_outputs
         self.rtio_channels += [rtio.Channel.from_phy(phy) for phy in led_outputs]
 
@@ -131,9 +80,6 @@ class StandaloneBase(MiniSoC, AMPSoC):
         self.add_rtio(self.rtio_channels)
 
     def add_rtio(self, rtio_channels):
-
-        self.submodules.rtio_crg = _RTIOCRG(self.platform, self.crg.cd_sys.clk)
-        self.csr_devices.append("rtio_crg")
         fix_serdes_timing_path(self.platform)
         self.submodules.rtio_tsc = rtio.TSC("async", glbl_fine_ts_width=3)
         self.submodules.rtio_core = rtio.Core(self.rtio_tsc, rtio_channels)
@@ -154,8 +100,7 @@ class StandaloneBase(MiniSoC, AMPSoC):
             self.csr_devices.append("rtio_moninj")
 
         self.platform.add_false_path_constraints(
-            self.crg.cd_sys.clk,
-            self.rtio_crg.cd_rtio.clk)
+            self.crg.cd_sys.clk)
 
         self.submodules.rtio_analyzer = rtio.Analyzer(self.rtio_tsc, self.rtio_core.cri,
                                                       self.get_native_sdram_if())
